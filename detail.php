@@ -39,26 +39,34 @@ if (isset($_SESSION['success_msg'])) {
 }
 
 // ----------------------------------------------------
-// 3. 患者マスターデータ（生年月日 birth を追加）
+// 3. 患者データをデータベースから取得（★ここを修正★）
 // ----------------------------------------------------
-$patient_list = [
-    '山田きよえ'   => ['birth' => '1947/05/20', 'age' => 78, 'history' => '高血圧、糖尿病', 'allergy' => 'ペニシリン系', 'tel' => '03-3261-8841', 'address' => '東京都千代田区麹町1-1'],
-    '高橋誠一郎'   => ['birth' => '1942/11/03', 'age' => 83, 'history' => '慢性心不全、痛風', 'allergy' => 'なし', 'tel' => '090-1145-2236', 'address' => '東京都千代田区一番町5-2'],
-    '田中まさる'   => ['birth' => '1943/01/15', 'age' => 81, 'history' => '慢性腎臓病、骨粗鬆症', 'allergy' => 'なし', 'tel' => '03-5211-9905', 'address' => '東京都千代田区九段南2-4'],
-    '鈴木いちろう' => ['birth' => '1949/02/15', 'age' => 76, 'history' => '脂質異常症、MCI', 'allergy' => 'なし', 'tel' => '090-2288-4411', 'address' => '東京都千代田区富士見1-3'],
-    '佐藤はな'     => ['birth' => '1940/10/05', 'age' => 85, 'history' => '変形性膝関節症', 'allergy' => 'なし', 'tel' => '03-3230-7762', 'address' => '東京都千代田区五番町2-1'],
-    '川口さなえ'   => ['birth' => '1946/07/21', 'age' => 79, 'history' => '高血圧、不眠症', 'allergy' => 'なし', 'tel' => '080-3399-5522', 'address' => '東京都千代田区三番町6-1']
-];
-
-$p = $patient_list[$patient_id] ?? ['birth' => '1944/01/01', 'age' => 82, 'history' => '慢性疾患', 'allergy' => 'なし', 'tel' => '090-9999-8888', 'address' => '東京都内'];
-
-$stmt_db = $pdo->prepare("SELECT tags, daily_target FROM patients WHERE user_id = ?");
+// 古い $patient_list (手書きリスト) は完全に削除し、DBのみを参照します
+$stmt_db = $pdo->prepare("SELECT * FROM patients WHERE user_id = ?");
 $stmt_db->execute([$patient_id]);
-$db_data = $stmt_db->fetch(PDO::FETCH_ASSOC);
-$tags = explode(',', $db_data['tags'] ?? '独居,足腰が不自由');
+$p = $stmt_db->fetch(PDO::FETCH_ASSOC);
+
+// 万が一DBにデータがない場合の予備処理
+if (!$p) {
+    $p = [
+        'user_id' => $patient_id,
+        'dob' => '1944/01/01',
+        'age' => 80,
+        'history' => '未登録',
+        'tel' => '不明',
+        'tags' => '未設定',
+        'daily_target' => 3
+    ];
+}
+
+// HTML側で使われている変数名（birth）に DBの値（dob）を合わせる
+$p['birth'] = $p['dob'];
+
+// タグを配列にする
+$tags = explode(',', $p['tags'] ?? '独居,足腰が不自由');
 
 // ----------------------------------------------------
-// 4. 家族からの返信 ＋ 逆リクエスト（メモ）を取得
+// 4. 家族からの返信履歴を取得
 // ----------------------------------------------------
 $stmt_replies = $pdo->prepare("SELECT reply_stamp, family_memo, created_at FROM family_messages WHERE user_id = ? AND (reply_stamp IS NOT NULL OR family_memo IS NOT NULL) ORDER BY created_at DESC LIMIT 5");
 $stmt_replies->execute([$patient_id]);
@@ -69,7 +77,7 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>患者詳細 | <?= htmlspecialchars($patient_id) ?></title>
+    <title>患者詳細 | <?= htmlspecialchars($p['user_id']) ?></title>
     <style>
         body { font-family: "Helvetica Neue", Arial, sans-serif; background: #f8f9fa; margin: 0; display: flex; min-height: 100vh; }
         .sidebar { width: 260px; background: #0078d7; color: white; padding: 25px; box-sizing: border-box; flex-shrink: 0; }
@@ -85,7 +93,6 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
         .memo-text { font-size: 16px; color: #d44917; font-weight: bold; background: #fff; padding: 10px; border-radius: 5px; border: 1px solid #ffeeba; margin-top: 5px; }
 
         .patient-name { font-size: 26px; font-weight: bold; margin: 0; }
-        /* 生年月日用のスタイル追加 */
         .patient-birth { font-size: 18px; color: #666; font-weight: normal; margin-left: 10px; }
         .patient-meta { color: #444; font-size: 14px; margin-top: 10px; line-height: 1.6; }
         .section-title { font-size: 17px; color: #0078d7; margin-bottom: 15px; border-left: 4px solid #0078d7; padding-left: 10px; }
@@ -104,14 +111,14 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
         <div class="sidebar-section">
             <h3>属性タグ</h3>
             <div class="tag-container">
-                <?php foreach($tags as $t): ?>
+                <?php foreach($tags as $t): if(trim($t) !== ''): ?>
                     <span class="tag-badge"><?= htmlspecialchars(trim($t)) ?></span>
-                <?php endforeach; ?>
+                <?php endif; endforeach; ?>
             </div>
         </div>
         <div class="sidebar-section">
-            <h3>病歴</h3>
-            <div class="sidebar-info"><?= htmlspecialchars($p['history']) ?></div>
+            <h3>病歴・処方内容</h3>
+            <div class="sidebar-info"><?= nl2br(htmlspecialchars($p['history'])) ?></div>
         </div>
     </div>
 
@@ -122,11 +129,11 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
 
         <div class="card">
             <h1 class="patient-name">
-                <?= htmlspecialchars($patient_id) ?> 
+                <?= htmlspecialchars($p['user_id']) ?> 
                 <span class="patient-birth">(<?= htmlspecialchars($p['birth']) ?>生 / <?= $p['age'] ?> 歳)</span>
             </h1>
             <div class="patient-meta">
-                <strong>現住所:</strong> <?= htmlspecialchars($p['address']) ?> / <strong>連絡先:</strong> <?= htmlspecialchars($p['tel']) ?>
+                <strong>連絡先:</strong> <?= htmlspecialchars($p['tel']) ?>
             </div>
         </div>
 
@@ -171,8 +178,8 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
             <h3 class="section-title">📝 家族用アプリへ報告</h3>
             <form method="POST">
                 <?php
-                $report_text = "【服薬状況報告】\n対象者：{$patient_id} 様\n達成率：0%\n\n＜薬剤師コメント＞\n最近、記録が滞っているようです。";
-                if (in_array('独居', $tags)) $report_text .= "\n独居のため、ご家族からもお電話等で確認をお願いします。";
+                $report_text = "【服薬状況報告】\n対象者：{$p['user_id']} 様\n達成率：0%\n\n＜薬剤師コメント＞\n最近、記録が滞っているようです。";
+                if (strpos($p['tags'], '独居') !== false) $report_text .= "\n独居のため、ご家族からもお電話等で確認をお願いします。";
                 ?>
                 <textarea name="report_content"><?= htmlspecialchars($report_text) ?></textarea>
                 <button type="submit" name="send_family_app" class="btn-send">📲 送信</button>
