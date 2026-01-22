@@ -31,7 +31,8 @@ $patient_info = [
     '西村じゅん' => ['dob' => '1951/12/25', 'daily_target' => 1],
     '松田あきら' => ['dob' => '1967/02/03', 'daily_target' => 2],
     '川口さなえ' => ['dob' => '1946/07/21', 'daily_target' => 3],
-    '山中けんた' => ['dob' => '1975/01/15', 'daily_target' => 2]
+    '山中けんた' => ['dob' => '1975/01/15', 'daily_target' => 2],
+    '川島健' => ['dob' => '1943/07/03', 'daily_target' => 3]
 ];
 
 $message = '';
