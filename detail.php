@@ -39,18 +39,18 @@ if (isset($_SESSION['success_msg'])) {
 }
 
 // ----------------------------------------------------
-// 3. 患者マスターデータ（省略なし）
+// 3. 患者マスターデータ（生年月日 birth を追加）
 // ----------------------------------------------------
 $patient_list = [
-    '山田きよえ'   => ['age' => 78, 'history' => '高血圧、糖尿病', 'allergy' => 'ペニシリン系', 'tel' => '03-3261-8841', 'address' => '東京都千代田区麹町1-1'],
-    '高橋誠一郎'   => ['age' => 83, 'history' => '慢性心不全、痛風', 'allergy' => 'なし', 'tel' => '090-1145-2236', 'address' => '東京都千代田区一番町5-2'],
-    '田中まさる'   => ['age' => 81, 'history' => '慢性腎臓病、骨粗鬆症', 'allergy' => 'なし', 'tel' => '03-5211-9905', 'address' => '東京都千代田区九段南2-4'],
-    '鈴木いちろう' => ['age' => 76, 'history' => '脂質異常症、MCI', 'allergy' => 'なし', 'tel' => '090-2288-4411', 'address' => '東京都千代田区富士見1-3'],
-    '佐藤はな'     => ['age' => 85, 'history' => '変形性膝関節症', 'allergy' => 'なし', 'tel' => '03-3230-7762', 'address' => '東京都千代田区五番町2-1'],
-    '川口さなえ'   => ['age' => 79, 'history' => '高血圧、不眠症', 'allergy' => 'なし', 'tel' => '080-3399-5522', 'address' => '東京都千代田区三番町6-1']
+    '山田きよえ'   => ['birth' => '1947/05/20', 'age' => 78, 'history' => '高血圧、糖尿病', 'allergy' => 'ペニシリン系', 'tel' => '03-3261-8841', 'address' => '東京都千代田区麹町1-1'],
+    '高橋誠一郎'   => ['birth' => '1942/11/03', 'age' => 83, 'history' => '慢性心不全、痛風', 'allergy' => 'なし', 'tel' => '090-1145-2236', 'address' => '東京都千代田区一番町5-2'],
+    '田中まさる'   => ['birth' => '1943/01/15', 'age' => 81, 'history' => '慢性腎臓病、骨粗鬆症', 'allergy' => 'なし', 'tel' => '03-5211-9905', 'address' => '東京都千代田区九段南2-4'],
+    '鈴木いちろう' => ['birth' => '1949/02/15', 'age' => 76, 'history' => '脂質異常症、MCI', 'allergy' => 'なし', 'tel' => '090-2288-4411', 'address' => '東京都千代田区富士見1-3'],
+    '佐藤はな'     => ['birth' => '1940/10/05', 'age' => 85, 'history' => '変形性膝関節症', 'allergy' => 'なし', 'tel' => '03-3230-7762', 'address' => '東京都千代田区五番町2-1'],
+    '川口さなえ'   => ['birth' => '1946/07/21', 'age' => 79, 'history' => '高血圧、不眠症', 'allergy' => 'なし', 'tel' => '080-3399-5522', 'address' => '東京都千代田区三番町6-1']
 ];
 
-$p = $patient_list[$patient_id] ?? ['age' => 82, 'history' => '慢性疾患', 'allergy' => 'なし', 'tel' => '090-9999-8888', 'address' => '東京都内'];
+$p = $patient_list[$patient_id] ?? ['birth' => '1944/01/01', 'age' => 82, 'history' => '慢性疾患', 'allergy' => 'なし', 'tel' => '090-9999-8888', 'address' => '東京都内'];
 
 $stmt_db = $pdo->prepare("SELECT tags, daily_target FROM patients WHERE user_id = ?");
 $stmt_db->execute([$patient_id]);
@@ -58,7 +58,7 @@ $db_data = $stmt_db->fetch(PDO::FETCH_ASSOC);
 $tags = explode(',', $db_data['tags'] ?? '独居,足腰が不自由');
 
 // ----------------------------------------------------
-// 4. 家族からの返信 ＋ 逆リクエスト（メモ）を取得 ★修正
+// 4. 家族からの返信 ＋ 逆リクエスト（メモ）を取得
 // ----------------------------------------------------
 $stmt_replies = $pdo->prepare("SELECT reply_stamp, family_memo, created_at FROM family_messages WHERE user_id = ? AND (reply_stamp IS NOT NULL OR family_memo IS NOT NULL) ORDER BY created_at DESC LIMIT 5");
 $stmt_replies->execute([$patient_id]);
@@ -81,11 +81,12 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
         .main-content { flex: 1; padding: 30px 40px; box-sizing: border-box; }
         .card { background: white; border-radius: 10px; padding: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 20px; border: 1px solid #e1e4e8; }
         
-        /* 💡 家族からの逆リクエスト用特別スタイル */
         .alert-card { border: 2px solid #ffcc00; background: #fffdf0; }
         .memo-text { font-size: 16px; color: #d44917; font-weight: bold; background: #fff; padding: 10px; border-radius: 5px; border: 1px solid #ffeeba; margin-top: 5px; }
 
         .patient-name { font-size: 26px; font-weight: bold; margin: 0; }
+        /* 生年月日用のスタイル追加 */
+        .patient-birth { font-size: 18px; color: #666; font-weight: normal; margin-left: 10px; }
         .patient-meta { color: #444; font-size: 14px; margin-top: 10px; line-height: 1.6; }
         .section-title { font-size: 17px; color: #0078d7; margin-bottom: 15px; border-left: 4px solid #0078d7; padding-left: 10px; }
         
@@ -120,7 +121,10 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
         <?php endif; ?>
 
         <div class="card">
-            <h1 class="patient-name"><?= htmlspecialchars($patient_id) ?> (<?= $p['age'] ?> 歳)</h1>
+            <h1 class="patient-name">
+                <?= htmlspecialchars($patient_id) ?> 
+                <span class="patient-birth">(<?= htmlspecialchars($p['birth']) ?>生 / <?= $p['age'] ?> 歳)</span>
+            </h1>
             <div class="patient-meta">
                 <strong>現住所:</strong> <?= htmlspecialchars($p['address']) ?> / <strong>連絡先:</strong> <?= htmlspecialchars($p['tel']) ?>
             </div>
@@ -139,7 +143,7 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
                     <div class="memo-text">「<?= htmlspecialchars($r['family_memo']) ?>」</div>
                 </div>
             <?php 
-                break; // 最新の1件だけ大きく出すなら break
+                break; 
                 endif; 
             endforeach; 
             if(!$has_memo): echo '<p style="color:#999;">特記事項はありません。</p>'; endif;
