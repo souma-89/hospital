@@ -9,7 +9,6 @@ $user = 'root';
 $password = ''; 
 
 try {
-    // ★文字化け対策（絵文字対応）のため utf8mb4 に変更
     $pdo = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8mb4", $user, $password);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
@@ -17,40 +16,31 @@ try {
 }
 
 // ----------------------------------------------------
-// 【デモ用】患者情報リスト
-// ----------------------------------------------------
-$patient_info = [
-    '山田きよえ' => ['dob' => '1947/05/20', 'daily_target' => 3],
-    '高橋誠一郎' => ['dob' => '1943/01/15', 'daily_target' => 3],
-    '田中まさる' => ['dob' => '1943/01/15', 'daily_target' => 3],
-    '鈴木いちろう' => ['dob' => '1960/10/01', 'daily_target' => 2],
-    '佐藤はな' => ['dob' => '1955/08/25', 'daily_target' => 1],
-    '高橋ゆうこ' => ['dob' => '1970/04/10', 'daily_target' => 2],
-    '小林たろう' => ['dob' => '1980/09/01', 'daily_target' => 2],
-    '木村はるか' => ['dob' => '1944/01/01', 'daily_target' => 3],
-    '西村じゅん' => ['dob' => '1951/12/25', 'daily_target' => 1],
-    '松田あきら' => ['dob' => '1967/02/03', 'daily_target' => 2],
-    '川口さなえ' => ['dob' => '1946/07/21', 'daily_target' => 3],
-    '山中けんた' => ['dob' => '1975/01/15', 'daily_target' => 2],
-    '川島健' => ['dob' => '1943/07/03', 'daily_target' => 3]
-];
-
-$message = '';
-$is_authenticated = false;
-
 // 1. ログアウト処理
+// ----------------------------------------------------
 if (isset($_GET['logout'])) {
     unset($_SESSION['patient_id']);
     header('Location: app.php');
     exit;
 }
 
-// 2. 認証処理
+$message = '';
+
+// ----------------------------------------------------
+// 2. 認証処理（★ここをDB参照に修正★）
+// ----------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'authenticate') {
     $input_name = trim($_POST['patient_name'] ?? '');
-    $input_dob = trim($_POST['dob'] ?? '');
-    if (isset($patient_info[$input_name]) && $patient_info[$input_name]['dob'] === $input_dob) {
-        $_SESSION['patient_id'] = $input_name;
+    $input_dob  = trim($_POST['dob'] ?? '');
+
+    // データベースから患者名と生年月日が一致する人を検索
+    $stmt_auth = $pdo->prepare("SELECT user_id FROM patients WHERE user_id = ? AND dob = ?");
+    $stmt_auth->execute([$input_name, $input_dob]);
+    $auth_patient = $stmt_auth->fetch(PDO::FETCH_ASSOC);
+
+    if ($auth_patient) {
+        // 一致すればセッションに保存してログイン
+        $_SESSION['patient_id'] = $auth_patient['user_id'];
         header('Location: app.php');
         exit;
     } else {
@@ -58,44 +48,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-// ★修正：スタンプ ＋ 家族メモ送信処理
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['stamp_action'])) {
-    $msg_id = $_POST['msg_id'];
-    $stamp = $_POST['stamp_value'];
-    $memo = trim($_POST['family_memo'] ?? ''); // メモを取得
+// ----------------------------------------------------
+// 3. 認証後のデータ取得
+// ----------------------------------------------------
+$is_authenticated = false;
+$pharmacy_messages = [];
+$recent_records = [];
+$daily_target = 0;
 
-    // family_memoカラムも更新するように修正
-    $stmt_stamp = $pdo->prepare("UPDATE family_messages SET reply_stamp = ?, family_memo = ? WHERE id = ?");
-    $stmt_stamp->execute([$stamp, $memo, $msg_id]);
-    
-    header('Location: app.php');
-    exit;
-}
-
-// 3. 認証状態の確認
 if (isset($_SESSION['patient_id'])) {
     $demo_user_id = $_SESSION['patient_id'];
     $is_authenticated = true;
-    $daily_target = $patient_info[$demo_user_id]['daily_target'] ?? 0;
-}
 
-// 4. データ取得
-$pharmacy_messages = [];
-$recent_records = [];
-if ($is_authenticated) {
+    // 患者の目標回数などを取得（★ここもDBから取得★）
+    $stmt_p = $pdo->prepare("SELECT daily_target FROM patients WHERE user_id = ?");
+    $stmt_p->execute([$demo_user_id]);
+    $p_data = $stmt_p->fetch(PDO::FETCH_ASSOC);
+    $daily_target = $p_data['daily_target'] ?? 0;
+
+    // 本日の服薬数カウント
     $today_date = date('Y-m-d');
     $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM medication_records WHERE user_id = ? AND DATE(record_timestamp) = ?");
     $stmt_count->execute([$demo_user_id, $today_date]);
     $today_count = $stmt_count->fetchColumn();
     
-    // family_memoも取得するようにクエリを変更
+    // 薬局からのメッセージ取得
     $stmt_msgs = $pdo->prepare("SELECT id, sender_name, message, created_at, reply_stamp, family_memo FROM family_messages WHERE user_id = ? ORDER BY created_at DESC LIMIT 5");
     $stmt_msgs->execute([$demo_user_id]);
     $pharmacy_messages = $stmt_msgs->fetchAll(PDO::FETCH_ASSOC);
 
+    // 直近の履歴取得
     $stmt_recent = $pdo->prepare("SELECT record_timestamp, time_slot FROM medication_records WHERE user_id = ? ORDER BY record_timestamp DESC LIMIT 5");
     $stmt_recent->execute([$demo_user_id]);
     $recent_records = $stmt_recent->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// （以下、スタンプ送信処理やHTML部分は以前のままでOKです）
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['stamp_action'])) {
+    $msg_id = $_POST['msg_id'];
+    $stamp = $_POST['stamp_value'];
+    $memo = trim($_POST['family_memo'] ?? '');
+    $stmt_stamp = $pdo->prepare("UPDATE family_messages SET reply_stamp = ?, family_memo = ? WHERE id = ?");
+    $stmt_stamp->execute([$stamp, $memo, $msg_id]);
+    header('Location: app.php');
+    exit;
 }
 ?>
 <!DOCTYPE html>
@@ -112,17 +108,13 @@ if ($is_authenticated) {
         .pharmacy-msg-box { background: #ffffff; border-left: 5px solid #0078d7; padding: 15px; margin-bottom: 15px; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .msg-header { display: flex; justify-content: space-between; font-size: 11px; color: #666; margin-bottom: 5px; }
         .msg-body { font-size: 14px; line-height: 1.5; white-space: pre-wrap; margin-bottom: 10px; }
-        
-        /* 逆リクエスト用フォームのスタイル */
         .memo-input { width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 8px; font-size: 13px; margin-bottom: 10px; box-sizing: border-box; resize: vertical; }
         .stamp-area { border-top: 1px solid #eee; padding-top: 10px; }
         .stamp-btns { display: flex; gap: 10px; }
-        
         .stamp-btn { flex: 1; padding: 10px; border: 1px solid #ddd; background: #f9f9f9; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: bold; transition: 0.2s; }
         .stamp-btn:active { background: #eee; transform: scale(0.95); }
         .replied-badge { background: #fff3cd; color: #856404; padding: 10px; border-radius: 10px; font-size: 13px; display: block; border: 1px solid #ffeeba; }
         .family-memo-view { font-size: 12px; color: #666; margin-top: 5px; border-top: 1px dashed #ddd; padding-top: 5px; }
-
         .auth-form input { width: 100%; padding: 12px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box; }
         .auth-btn { width: 100%; padding: 15px; background: #0078d7; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; }
     </style>
@@ -157,9 +149,7 @@ if ($is_authenticated) {
                         <form method="POST">
                             <input type="hidden" name="msg_id" value="<?= $m['id'] ?>">
                             <input type="hidden" name="stamp_action" value="1">
-                            
-                            <textarea name="family_memo" class="memo-input" placeholder="薬剤師へ伝えたい変化（ふらつき、飲み込みにくい等）があれば記入してください"></textarea>
-                            
+                            <textarea name="family_memo" class="memo-input" placeholder="薬剤師へ伝えたい変化があれば記入してください"></textarea>
                             <div class="stamp-btns">
                                 <button type="submit" name="stamp_value" value="👍 了解！" class="stamp-btn">👍 了解！</button>
                                 <button type="submit" name="stamp_value" value="💊 飲みました" class="stamp-btn">💊 飲みました</button>
