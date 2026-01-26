@@ -21,19 +21,21 @@ try {
 $patient_id = isset($_GET['id']) ? urldecode($_GET['id']) : '山田きよえ';
 
 // ----------------------------------------------------
-// 2. 【追加】患者情報の更新処理（POST）
+// 2. 患者情報の更新処理（staff_memo を追加）
 // ----------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_patient'])) {
-    $stmt_update = $pdo->prepare("UPDATE patients SET dob = ?, age = ?, tel = ?, tags = ?, history = ? WHERE user_id = ?");
+    // データベースに staff_memo カラムがある前提です
+    $stmt_update = $pdo->prepare("UPDATE patients SET dob = ?, age = ?, tel = ?, tags = ?, history = ?, staff_memo = ? WHERE user_id = ?");
     $stmt_update->execute([
         $_POST['dob'],
         $_POST['age'],
         $_POST['tel'],
         $_POST['tags'],
         $_POST['history'],
+        $_POST['staff_memo'], // 薬剤師専用メモ
         $patient_id
     ]);
-    $_SESSION['success_msg'] = "✅ 患者情報を更新しました！";
+    $_SESSION['success_msg'] = "✅ 患者情報と引き継ぎメモを更新しました！";
     header("Location: detail.php?id=" . urlencode($patient_id));
     exit;
 }
@@ -68,7 +70,7 @@ if (!$p) {
 }
 
 $tags = explode(',', $p['tags'] ?? '');
-$edit_mode = isset($_GET['edit']); // URLに ?edit=1 があれば編集モード
+$edit_mode = isset($_GET['edit']); 
 
 // ----------------------------------------------------
 // 5. 家族からの返信履歴を取得
@@ -85,20 +87,21 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
     <title>患者詳細 | <?= htmlspecialchars($p['user_id']) ?></title>
     <style>
         body { font-family: "Helvetica Neue", Arial, sans-serif; background: #f8f9fa; margin: 0; display: flex; min-height: 100vh; }
-        .sidebar { width: 260px; background: #0078d7; color: white; padding: 25px; box-sizing: border-box; flex-shrink: 0; }
-        .sidebar-section { margin-bottom: 30px; }
+        .sidebar { width: 280px; background: #0078d7; color: white; padding: 25px; box-sizing: border-box; flex-shrink: 0; }
+        .sidebar-section { margin-bottom: 25px; }
         .sidebar-section h3 { font-size: 15px; margin-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.3); padding-bottom: 5px; }
         .tag-badge { background: rgba(255,255,255,0.2); padding: 3px 8px; border-radius: 4px; font-size: 11px; margin-right: 4px; display: inline-block; margin-bottom: 4px; }
         .sidebar-info { font-size: 13px; line-height: 1.6; }
+
+        /* 薬剤師メモ専用スタイル */
+        .staff-memo-box { background: rgba(0, 0, 0, 0.2); padding: 12px; border-radius: 8px; border-left: 4px solid #ffcc00; }
+        .staff-memo-title { color: #ffcc00; font-weight: bold; font-size: 13px; margin-bottom: 8px; display: block; }
 
         .main-content { flex: 1; padding: 30px 40px; box-sizing: border-box; }
         .card { background: white; border-radius: 10px; padding: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 20px; border: 1px solid #e1e4e8; position: relative; }
         
         .edit-btn { position: absolute; top: 20px; right: 20px; text-decoration: none; font-size: 12px; background: #eee; color: #333; padding: 5px 10px; border-radius: 4px; }
-        
-        /* 編集フォーム用スタイル */
-        .edit-input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; font-size: 14px; }
-        .edit-textarea { width: 100%; height: 80px; }
+        .edit-input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; font-size: 14px; font-family: inherit; }
         .save-btn { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; }
 
         .patient-name { font-size: 26px; font-weight: bold; margin: 0; }
@@ -121,7 +124,7 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
             <h3>属性タグ</h3>
             <div class="tag-container">
                 <?php if ($edit_mode): ?>
-                    <input type="text" name="tags" class="edit-input" value="<?= htmlspecialchars($p['tags']) ?>" placeholder="カンマ区切り（独居,足腰が不自由など）">
+                    <input type="text" name="tags" class="edit-input" value="<?= htmlspecialchars($p['tags']) ?>" placeholder="例: 独居, 足腰不自由">
                 <?php else: ?>
                     <?php foreach($tags as $t): if(trim($t)!=='') : ?>
                         <span class="tag-badge"><?= htmlspecialchars(trim($t)) ?></span>
@@ -129,14 +132,28 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
                 <?php endif; ?>
             </div>
         </div>
+
         <div class="sidebar-section">
             <h3>病歴・処方内容</h3>
             <div class="sidebar-info">
                 <?php if ($edit_mode): ?>
-                    <textarea name="history" class="edit-input edit-textarea"><?= htmlspecialchars($p['history']) ?></textarea>
+                    <textarea name="history" class="edit-input" style="height: 100px;"><?= htmlspecialchars($p['history']) ?></textarea>
                 <?php else: ?>
                     <?= nl2br(htmlspecialchars($p['history'])) ?>
                 <?php endif; ?>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <div class="staff-memo-box">
+                <span class="staff-memo-title">🔑 薬剤師引き継ぎメモ</span>
+                <div class="sidebar-info">
+                    <?php if ($edit_mode): ?>
+                        <textarea name="staff_memo" class="edit-input" style="height: 150px; background: #fff; color: #333;" placeholder="家族には見えないメモです"><?= htmlspecialchars($p['staff_memo'] ?? '') ?></textarea>
+                    <?php else: ?>
+                        <?= !empty($p['staff_memo']) ? nl2br(htmlspecialchars($p['staff_memo'])) : '<span style="opacity:0.6;">(未記入)</span>' ?>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
     </div>
@@ -157,9 +174,9 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
             <h1 class="patient-name">
                 <?= htmlspecialchars($p['user_id']) ?> 
                 <?php if ($edit_mode): ?>
-                    <div style="margin-top:10px;">
-                        生年月日: <input type="text" name="dob" value="<?= htmlspecialchars($p['dob']) ?>" class="edit-input" style="width:150px;">
-                        年齢: <input type="number" name="age" value="<?= htmlspecialchars($p['age']) ?>" class="edit-input" style="width:80px;">
+                    <div style="margin-top:10px; font-size: 14px;">
+                        生年月日: <input type="text" name="dob" value="<?= htmlspecialchars($p['dob']) ?>" class="edit-input" style="width:150px; display:inline;">
+                        年齢: <input type="number" name="age" value="<?= htmlspecialchars($p['age']) ?>" class="edit-input" style="width:80px; display:inline;">
                     </div>
                 <?php else: ?>
                     <span class="patient-birth">(<?= htmlspecialchars($p['dob']) ?>生 / <?= $p['age'] ?> 歳)</span>
@@ -168,13 +185,15 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
             <div class="patient-meta">
                 <strong>連絡先:</strong> 
                 <?php if ($edit_mode): ?>
-                    <input type="text" name="tel" value="<?= htmlspecialchars($p['tel']) ?>" class="edit-input" style="width:200px;">
+                    <input type="text" name="tel" value="<?= htmlspecialchars($p['tel']) ?>" class="edit-input" style="width:200px; display:inline;">
                 <?php else: ?>
                     <?= htmlspecialchars($p['tel']) ?>
                 <?php endif; ?>
             </div>
         </div>
-</form> <div class="card alert-card">
+</form> 
+
+        <div class="card alert-card">
             <h3 class="section-title" style="color: #856404; border-left-color: #ffcc00;">⚠️ 家族からの気になる報告（最新）</h3>
             <?php 
             $has_memo = false;
@@ -182,7 +201,7 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
                 if(!empty($r['family_memo'])): 
                     $has_memo = true;
             ?>
-                <div class="reply-item" style="border: 1px solid #eee; padding:10px; background:#fff; margin-bottom:10px;">
+                <div class="reply-item" style="border: 1px solid #eee; padding:12px; background:#fff; margin-bottom:10px; border-radius: 8px;">
                     <span style="color: #666; font-size: 12px;"><?= date('m/d H:i', strtotime($r['created_at'])) ?> の相談：</span>
                     <div class="memo-text">「<?= htmlspecialchars($r['family_memo']) ?>」</div>
                 </div>
