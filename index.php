@@ -1,20 +1,16 @@
 <?php
-// PHPセッションを開始
 session_start();
 date_default_timezone_set('Asia/Tokyo');
 
-// ========== データベース接続設定 ==========
 $host = 'localhost';
 $db_name = 'medicare_db'; 
 $user = 'root'; 
 $password = ''; 
-// ===============================================
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8mb4", $user, $password);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
-    // ★★★ 自動デモデータ調整ロジック ★★★
     $today_date = date('Y-m-d');
     if (!isset($_SESSION['last_demo_date']) || $_SESSION['last_demo_date'] !== $today_date) {
         $auto_insert_sql = "
@@ -34,9 +30,6 @@ try {
     die("データベース接続エラー: " . $e->getMessage()); 
 }
 
-// ----------------------------------------------------
-// 1. 患者の情報をDBから取得
-// ----------------------------------------------------
 $stmt = $pdo->query("SELECT user_id, daily_target, tags FROM patients");
 $patient_raw_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -47,9 +40,6 @@ foreach ($patient_raw_data as $p) {
     $patient_tags[$p['user_id']] = $p['tags'] ?? '';
 }
 
-// ----------------------------------------------------
-// 2. 服薬データの取得とフィルタ
-// ----------------------------------------------------
 $daily_target = isset($_GET['target']) ? (int)$_GET['target'] : 3; 
 if ($daily_target < 1 || $daily_target > 3) $daily_target = 3;
 
@@ -83,11 +73,9 @@ if (empty($filtered_user_ids)) {
         }
     }
 
-    // --- 【修正版】現状報告テキストの生成 ---
     function generate_status_report($data, $tags) {
         $is_single = strpos($tags, '独居') !== false;
         $is_dementia = strpos($tags, '認知症') !== false;
-
         if ($data['today_count'] === 0) {
             $msg = "本日の記録なし。至急状況の確認が必要。";
             if ($is_single) $msg .= "（独居のため安否確認を推奨）";
@@ -130,7 +118,7 @@ if (empty($filtered_user_ids)) {
             'consecutive_miss' => $consecutive_miss, 
             'last_record' => $latest_record_map[$user] ?? null,
             'tags' => $patient_tags[$user],
-            'status_report' => generate_status_report($temp_data, $patient_tags[$user]) // ここを修正
+            'status_report' => generate_status_report($temp_data, $patient_tags[$user])
         ];
     }
 
@@ -146,7 +134,7 @@ if (empty($filtered_user_ids)) {
     <meta charset="UTF-8">
     <title>【薬局】介入優先リスト | メディケア・リワード</title>
     <style>
-        body { font-family: "Segoe UI", "Hiragino Sans", sans-serif; background: #eef2f5; color: #333; margin: 0; padding: 20px; }
+        body { font-family: "Segoe UI", "Hiragino Sans", sans-serif; background: #eef2f5; color: #333; margin: 0; padding: 0 20px 20px 20px; }
         .container { max-width: 1300px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); } 
         h1 { color: #0078d7; border-bottom: 3px solid #0078d7; padding-bottom: 10px; margin-top: 0; }
         .priority-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -164,6 +152,16 @@ if (empty($filtered_user_ids)) {
     </style>
 </head>
 <body>
+
+<nav style="background: white; padding: 15px 0; display: flex; justify-content: center; align-items: center; border-bottom: 3px solid #0078d7; margin-bottom: 20px;">
+    <a href="index.php" style="text-decoration: none; display: flex; align-items: center; gap: 20px;">
+        <img src="logo.png" alt="Logo" style="height: 65px; width: auto;">
+        <div style="display: flex; flex-direction: column;">
+            <div style="font-size: 28px; color: #0078d7; font-weight: bold; line-height: 1.1; letter-spacing: 2px;">中村病院</div>
+            <div style="font-size: 14px; color: #666; font-weight: bold; letter-spacing: 1px;">NAKAMURA MEDICAL CENTER</div>
+        </div>
+    </a>
+</nav>
 
 <div class="container">
     <h1>🏥 薬局管理画面 - 介入優先リスト</h1>
