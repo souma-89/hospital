@@ -87,12 +87,12 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
 </head>
 <body>
 
-<nav style="background: white; padding: 15px 0; display: flex; justify-content: center; align-items: center; border-bottom: 3px solid #0078d7;">
-    <a href="index.php" style="text-decoration: none; display: flex; align-items: center; gap: 20px;">
-        <img src="logo.png" alt="Logo" style="height: 65px; width: auto;">
-        <div style="display: flex; flex-direction: column;">
-            <div style="font-size: 28px; color: #0078d7; font-weight: bold; line-height: 1.1; letter-spacing: 2px;">中村病院</div>
-            <div style="font-size: 14px; color: #666; font-weight: bold; letter-spacing: 1px;">NAKAMURA MEDICAL CENTER</div>
+<nav style="background: white; padding: 25px 0; display: flex; justify-content: center; align-items: center; border-bottom: 4px solid #0078d7;">
+    <a href="index.php" style="text-decoration: none; display: flex; align-items: center; gap: 30px;">
+        <img src="logo.png" alt="Logo" style="height: 100px; width: auto;">
+        <div style="display: flex; flex-direction: column; justify-content: center;">
+            <div style="font-size: 48px; color: #0078d7; font-weight: bold; line-height: 1.1; letter-spacing: 3px;">中村病院</div>
+            <div style="font-size: 18px; color: #666; font-weight: bold; letter-spacing: 1.5px; margin-top: 2px;">NAKAMURA MEDICAL CENTER</div>
         </div>
     </a>
 </nav>
