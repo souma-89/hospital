@@ -49,8 +49,8 @@ $p = $stmt_db->fetch(PDO::FETCH_ASSOC);
 
 if (!$p) { die("患者データが見つかりません。"); }
 
-// --- 直近7日間の服薬記録を取得 (ここが抜けていました) ---
-$stmt_records = $pdo->prepare("SELECT time_slot, record_timestamp FROM medication_records WHERE user_id = ? AND record_timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY) ORDER BY record_timestamp DESC");
+// --- 直近7日間の服薬記録を取得（photo_pathも取得するように修正） ---
+$stmt_records = $pdo->prepare("SELECT time_slot, record_timestamp, photo_path FROM medication_records WHERE user_id = ? AND record_timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY) ORDER BY record_timestamp DESC");
 $stmt_records->execute([$patient_id]);
 $med_records = $stmt_records->fetchAll(PDO::FETCH_ASSOC);
 
@@ -58,7 +58,12 @@ $med_records = $stmt_records->fetchAll(PDO::FETCH_ASSOC);
 $formatted_records = [];
 foreach ($med_records as $row) {
     $date = date('m/d', strtotime($row['record_timestamp']));
-    $formatted_records[$date][] = $row['time_slot'];
+    // スロット名と写真パスをセットで保存
+    $formatted_records[$date][] = [
+        'slot' => $row['time_slot'],
+        'photo' => $row['photo_path'],
+        'time' => date('H:i', strtotime($row['record_timestamp']))
+    ];
 }
 
 $tags = explode(',', $p['tags'] ?? '');
@@ -92,17 +97,29 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
         .section-title { font-size: 17px; color: #0078d7; margin-bottom: 15px; border-left: 4px solid #0078d7; padding-left: 10px; font-weight: bold; }
         
         /* 服薬記録用スタイル */
-        .record-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        .record-table th, .record-table td { border: 1px solid #eee; padding: 10px; text-align: center; }
+        .record-table { width: 100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
+        .record-table th, .record-table td { border: 1px solid #eee; padding: 12px; text-align: center; }
         .record-table th { background: #f9f9f9; font-size: 12px; color: #666; }
-        .slot-pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; background: #e8f5e9; color: #2e7d32; font-weight: bold; margin: 2px; }
+        .slot-pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; background: #e8f5e9; color: #2e7d32; font-weight: bold; margin-right: 5px; }
+        
+        /* 証拠写真プレビュー */
+        .evidence-img { width: 60px; height: 45px; object-fit: cover; border-radius: 4px; border: 1px solid #ddd; cursor: pointer; transition: 0.2s; }
+        .evidence-img:hover { opacity: 0.8; transform: scale(1.1); }
 
         .edit-btn { position: absolute; top: 20px; right: 20px; text-decoration: none; font-size: 12px; background: #eee; color: #333; padding: 5px 12px; border-radius: 4px; }
         .save-btn { background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer; font-weight: bold; }
         textarea { width: 100%; height: 80px; border: 1px solid #ddd; border-radius: 6px; padding: 10px; box-sizing: border-box; }
+
+        /* 簡易モーダル（拡大表示用） */
+        #imgModal { display: none; position: fixed; z-index: 1000; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); align-items: center; justify-content: center; }
+        #imgModal img { max-width: 90%; max-height: 90%; border: 5px solid white; border-radius: 8px; }
     </style>
 </head>
 <body>
+
+<div id="imgModal" onclick="this.style.display='none'">
+    <img id="modalImg" src="">
+</div>
 
 <nav style="background: white; padding: 25px 0; display: flex; justify-content: center; align-items: center; border-bottom: 4px solid #0078d7;">
     <a href="index.php" style="text-decoration: none; display: flex; align-items: center; gap: 30px;">
@@ -174,12 +191,13 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
         </div>
 
         <div class="card">
-            <h3 class="section-title">💊 直近7日間の服薬記録</h3>
+            <h3 class="section-title">💊 直近7日間の服薬記録（証拠写真）</h3>
             <table class="record-table">
                 <thead>
                     <tr>
-                        <th>日付</th>
-                        <th>記録された時間帯</th>
+                        <th style="width: 80px;">日付</th>
+                        <th>区分 / 時間</th>
+                        <th>服薬時の証拠写真</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -188,14 +206,31 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
                         $d = date('m/d', strtotime("-$i days"));
                     ?>
                     <tr>
-                        <td style="font-weight:bold; background:#fcfcfc; width:80px;"><?= $d ?></td>
+                        <td style="font-weight:bold; background:#fcfcfc;"><?= $d ?></td>
                         <td style="text-align:left;">
                             <?php if (isset($formatted_records[$d])): ?>
-                                <?php foreach($formatted_records[$d] as $slot): ?>
-                                    <span class="slot-pill"><?= htmlspecialchars($slot) ?></span>
+                                <?php foreach($formatted_records[$d] as $rec): ?>
+                                    <div style="margin-bottom: 5px;">
+                                        <span class="slot-pill"><?= htmlspecialchars($rec['slot']) ?></span>
+                                        <span style="font-size: 12px; color: #666;"><?= $rec['time'] ?></span>
+                                    </div>
                                 <?php endforeach; ?>
                             <?php else: ?>
                                 <span style="color:#ccc; font-size:11px;">記録なし</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if (isset($formatted_records[$d])): ?>
+                                <?php foreach($formatted_records[$d] as $rec): ?>
+                                    <?php if (!empty($rec['photo'])): ?>
+                                        <img src="uploads/<?= htmlspecialchars($rec['photo']) ?>" 
+                                             class="evidence-img" 
+                                             onclick="showImage(this.src)" 
+                                             title="<?= htmlspecialchars($rec['slot']) ?>の記録写真">
+                                    <?php else: ?>
+                                        <span style="font-size: 10px; color: #999;">(写真なし)</span>
+                                    <?php endif; ?>
+                                <?php endforeach; ?>
                             <?php endif; ?>
                         </td>
                     </tr>
@@ -227,5 +262,17 @@ $family_replies = $stmt_replies->fetchAll(PDO::FETCH_ASSOC);
         <p style="text-align:center;"><a href="index.php" style="color:#999; text-decoration:none;">← 患者一覧に戻る</a></p>
     </div>
 </div>
-</form> </body>
+</form>
+
+<script>
+    // 画像をモーダルで拡大表示する関数
+    function showImage(src) {
+        const modal = document.getElementById('imgModal');
+        const modalImg = document.getElementById('modalImg');
+        modal.style.display = "flex";
+        modalImg.src = src;
+    }
+</script>
+
+</body>
 </html>
