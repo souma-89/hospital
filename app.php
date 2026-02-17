@@ -15,6 +15,13 @@ try {
     die("データベース接続エラー"); 
 }
 
+// ★追加：アクセスログを保存する関数
+function saveAccessLog($pdo, $patient_id) {
+    $ua = $_SERVER['HTTP_USER_AGENT']; // 端末情報（スマホかPCか）を取得
+    $stmt = $pdo->prepare("INSERT INTO access_logs (user_id, user_agent) VALUES (?, ?)");
+    $stmt->execute([$patient_id, $ua]);
+}
+
 // 1. ログアウト処理
 if (isset($_GET['logout'])) {
     unset($_SESSION['patient_id']);
@@ -34,6 +41,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     if ($auth_patient) {
         $_SESSION['patient_id'] = $auth_patient['user_id'];
+        
+        // ★追加：ログイン成功時にログを記録
+        saveAccessLog($pdo, $_SESSION['patient_id']);
+        
         header('Location: app.php');
         exit;
     } else {
@@ -49,6 +60,9 @@ $daily_target = 0;
 if (isset($_SESSION['patient_id'])) {
     $demo_user_id = $_SESSION['patient_id'];
     $is_authenticated = true;
+
+    // ★追加：ページを開くたびにログを残すならここに追加（今回はログイン時のみにしています）
+    // saveAccessLog($pdo, $demo_user_id); 
 
     $stmt_p = $pdo->prepare("SELECT daily_target FROM patients WHERE user_id = ?");
     $stmt_p->execute([$demo_user_id]);
@@ -128,7 +142,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['stamp_action'])) {
         
         .logout-link { display: block; text-align: center; margin-top: 40px; color: #bbb; font-size: 14px; text-decoration: none; }
         
-        /* フッター：コピーライト用 */
         footer { 
             padding: 20px 0 30px; 
             text-align: center; 
