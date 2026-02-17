@@ -115,16 +115,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['stamp_action'])) {
             width: 100%; padding: 20px; background: var(--main-blue); 
             color: white; border: none; border-radius: 15px; 
             font-size: 20px; font-weight: bold; cursor: pointer; 
-            box-shadow: 0 6px 0 #003a6e; margin-bottom: 25px;
+            box-shadow: 0 6px 0 #003a6e; margin-bottom: 20px;
         }
-        .contact-note { font-size: 13px; color: #777; line-height: 1.6; margin-top: 10px; }
+
+        .contact-note { font-size: 13px; color: #777; margin-top: 10px; text-align: center; }
 
         /* 認証後の表示 */
         .summary-card { background: linear-gradient(135deg, var(--main-blue), #0078d7); color: white; padding: 30px 20px; border-radius: 20px; text-align: center; margin-bottom: 30px; }
         .summary-card strong { font-size: 28px; }
         .section-title { font-size: 18px; color: var(--main-blue); font-weight: bold; margin: 30px 0 15px; border-left: 5px solid var(--main-green); padding-left: 12px; }
         .msg-box { background: white; border: 1px solid #eee; border-radius: 15px; padding: 20px; margin-bottom: 20px; }
-        .logout-link { display: block; text-align: center; margin-top: 50px; color: #bbb; font-size: 14px; text-decoration: none; padding-bottom: 20px; }
+        
+        .logout-link { display: block; text-align: center; margin-top: 40px; color: #bbb; font-size: 14px; text-decoration: none; }
+        
+        /* フッター：コピーライト用 */
+        footer { 
+            padding: 20px 0 30px; 
+            text-align: center; 
+            border-top: 1px solid #f0f0f0; 
+            margin-top: 20px;
+        }
+        .copyright { font-size: 12px; color: #aaa; letter-spacing: 0.5px; }
     </style>
 </head>
 <body>
@@ -153,11 +164,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['stamp_action'])) {
                     <div class="msg-text"><?= htmlspecialchars($m['message']) ?></div>
                     
                     <?php if ($m['reply_stamp']): ?>
-                        <div class="badge-done" style="margin-top:15px; background:#e8f5e9; color:#2e7d32; padding:15px; border-radius:12px; font-size:14px;">
+                        <div style="margin-top:15px; background:#e8f5e9; color:#2e7d32; padding:15px; border-radius:12px; font-size:14px;">
                             <strong>✅ 既読：<?= htmlspecialchars($m['reply_stamp']) ?></strong>
-                            <?php if($m['family_memo']): ?>
-                                <div style="margin-top:8px; border-top:1px solid #c8e6c9; padding-top:8px;">相談：<?= htmlspecialchars($m['family_memo']) ?></div>
-                            <?php endif; ?>
                         </div>
                     <?php else: ?>
                         <form method="POST" style="margin-top:15px;">
@@ -173,7 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['stamp_action'])) {
                 </div>
             <?php endforeach; ?>
 
-            <p class="contact-note" style="text-align: center;">※ご不明な点は中村病院にお問い合わせください</p>
+            <p class="contact-note">※ご不明な点は中村病院にお問い合わせください</p>
             <a href="?logout=true" class="logout-link">ログアウト</a>
 
         <?php else: ?>
@@ -190,6 +198,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['stamp_action'])) {
             </div>
         <?php endif; ?>
     </div>
+
+    <footer>
+        <div class="copyright">© Nakamura Hospital All Rights Reserved.</div>
+    </footer>
 </div>
 </body>
 </html>
