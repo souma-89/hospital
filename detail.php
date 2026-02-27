@@ -2,8 +2,14 @@
 session_start();
 date_default_timezone_set('Asia/Tokyo');
 
+// 薬剤師ログインチェック
+if (!isset($_SESSION['yakuzaishi_login'])) {
+    header('Location: login.php');
+    exit;
+}
+
 /* =====================
-   DB設定
+    DB設定
 ===================== */
 $host = 'localhost';
 $db_name = 'medicare_db';
@@ -11,63 +17,85 @@ $user = 'root';
 $password = '';
 
 try {
-    $pdo = new PDO(
-        "mysql:host=$host;dbname=$db_name;charset=utf8mb4",
-        $user,
-        $password,
-        [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-        ]
-    );
+    $pdo = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8mb4", $user, $password, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+    ]);
 } catch (PDOException $e) {
     die("データベース接続エラー: " . $e->getMessage());
 }
 
 /* =====================
-   定数定義
+    定数定義
 ===================== */
 define('UPLOAD_URL', '/hukuyaku/uploads/');
 
 /* =====================
-   患者ID取得
+    患者データ取得
 ===================== */
 $patient_id = isset($_GET['id']) ? urldecode($_GET['id']) : '';
 
+// 1. 患者基本情報の取得
 $stmt_db = $pdo->prepare("SELECT * FROM patients WHERE user_id = ?");
 $stmt_db->execute([$patient_id]);
 $p = $stmt_db->fetch(PDO::FETCH_ASSOC);
 
 if (!$p) {
-    die("患者データが見つかりません。");
+    die("エラー：指定された患者データが見つかりません。");
 }
 
 /* =====================
-   家族へのメッセージ送信処理 (追加分)
+    ✨ 実務記録（監査ログ）の書き込み
+    「誰がどの患者を診たか」を記録する
+===================== */
+$operator_id = $_SESSION['yakuzaishi_login']; // 共通ログインID
+
+try {
+    // 記録内容を「詳細閲覧」から「診察・介入」へアップデート
+    $stmt_audit = $pdo->prepare("INSERT INTO audit_logs (staff_id, patient_id, action_type) VALUES (?, ?, '診察・介入')");
+    $stmt_audit->execute([$operator_id, $patient_id]);
+} catch (PDOException $e) {
+    // ログ失敗でメイン画面を止めないための処理
+    error_log("Audit Log Error: " . $e->getMessage());
+}
+
+/* =====================
+    家族ログインID取得と自動生成
+===================== */
+$stmt_rand = $pdo->prepare("SELECT display_id FROM patient_ids WHERE patient_id = ? LIMIT 1");
+$stmt_rand->execute([$patient_id]);
+$rand_data = $stmt_rand->fetch(PDO::FETCH_ASSOC);
+
+$display_id = $rand_data['display_id'] ?? null;
+
+if (!$display_id) {
+    $display_id = strtoupper(bin2hex(random_bytes(4))); 
+    $stmt_insert = $pdo->prepare("INSERT INTO patient_ids (patient_id, display_id) VALUES (?, ?)");
+    $stmt_insert->execute([$patient_id, $display_id]);
+}
+
+/* =====================
+    家族へのメッセージ送信
 ===================== */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_family_app'])) {
     $report_content = $_POST['report_content'] ?? '';
     if (!empty($report_content)) {
         $stmt_send = $pdo->prepare("INSERT INTO family_messages (user_id, sender_name, message) VALUES (?, '中村病院 薬剤部', ?)");
         $stmt_send->execute([$patient_id, $report_content]);
-        
+
         $_SESSION['success_msg'] = "✅ 家族用アプリへメッセージを送信しました！";
         header("Location: detail.php?id=" . urlencode($patient_id));
         exit;
     }
 }
 
-$success_msg = '';
-if (isset($_SESSION['success_msg'])) {
-    $success_msg = $_SESSION['success_msg'];
-    unset($_SESSION['success_msg']);
-}
+$success_msg = $_SESSION['success_msg'] ?? '';
+unset($_SESSION['success_msg']);
 
 /* =====================
-   表示用データの取得
+    服薬記録取得
 ===================== */
-// 1. 服薬記録
 $stmt_records = $pdo->prepare(
-    "SELECT time_slot, record_timestamp, photo_path
+    "SELECT time_slot, record_timestamp, photo_path, ai_analysis_result
      FROM medication_records
      WHERE user_id = ?
        AND record_timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
@@ -80,16 +108,19 @@ $formatted_records = [];
 foreach ($med_records as $row) {
     $date = date('m/d', strtotime($row['record_timestamp']));
     $formatted_records[$date][] = [
-        'slot'  => $row['time_slot'],
-        'photo' => $row['photo_path'],
-        'time'  => date('H:i', strtotime($row['record_timestamp']))
+        'slot'      => $row['time_slot'],
+        'photo'     => $row['photo_path'],
+        'time'      => date('H:i', strtotime($row['record_timestamp'])),
+        'ai_result' => $row['ai_analysis_result']
     ];
 }
 
-// 2. 家族への送信履歴 (追加分)
-$stmt_history = $pdo->prepare("SELECT message, created_at FROM family_messages WHERE user_id = ? AND sender_name = '中村病院 薬剤部' ORDER BY created_at DESC LIMIT 3");
+/* =====================
+    家族送信履歴
+===================== */
+$stmt_history = $pdo->prepare("SELECT sender_name, message, created_at FROM family_messages WHERE user_id = ? ORDER BY created_at DESC LIMIT 5");
 $stmt_history->execute([$patient_id]);
-$send_logs = $stmt_history->fetchAll(PDO::FETCH_ASSOC);
+$chat_logs = $stmt_history->fetchAll(PDO::FETCH_ASSOC);
 
 ?>
 <!DOCTYPE html>
@@ -97,133 +128,84 @@ $send_logs = $stmt_history->fetchAll(PDO::FETCH_ASSOC);
 <head>
 <meta charset="UTF-8">
 <title>患者詳細 | <?= htmlspecialchars($p['user_id']) ?></title>
-
 <style>
-body {
-    font-family: "Helvetica Neue", Arial, sans-serif;
-    background: #f8f9fa;
-    margin: 0;
-    display: flex;
-}
-
-.sidebar {
-    width: 250px;
-    background: #0078d7;
-    color: #fff;
-    padding: 20px;
-    min-height: 100vh;
-    position: fixed;
-}
-
-.main-content {
-    flex: 1;
-    margin-left: 250px;
-    padding: 40px;
-}
-
-.card {
-    background: #fff;
-    border-radius: 12px;
-    padding: 25px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    margin-bottom: 25px;
-}
-
-.record-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-}
-
-.record-table th,
-.record-table td {
-    border-bottom: 1px solid #eee;
-    padding: 16px;
-    vertical-align: middle;
-}
-
-.record-table th {
-    color: #666;
-    font-size: 14px;
-    text-align: left;
-}
-
-.record-table th:nth-child(1), .record-table td:nth-child(1) { width: 90px; }
-.record-table th:nth-child(2), .record-table td:nth-child(2) { width: 220px; }
-
-.evidence-img {
-    width: 80px; height: 60px;
-    object-fit: cover; border-radius: 6px; border: 1px solid #ddd;
-    cursor: pointer; transition: 0.2s;
-}
-
-.evidence-img:hover { transform: scale(1.1); box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
-
-.slot-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
-.slot-morning { background: #e3f2fd; color: #1976d2; }
-.slot-noon    { background: #fff3e0; color: #f57c00; }
-.slot-evening { background: #f3e5f5; color: #7b1fa2; }
-
-/* 追加分のスタイル */
-.btn-send { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; }
-.btn-send:hover { background: #218838; }
-.history-item { border-bottom: 1px solid #eee; padding: 10px 0; font-size: 13px; }
-.success-banner { background: #d4edda; color: #155724; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #c3e6cb; }
+    body { font-family: sans-serif; background:#f8f9fa; margin:0; display:flex; }
+    .sidebar { width:260px; background:#0078d7; color:#fff; padding:20px; min-height:100vh; position:fixed; box-sizing: border-box; }
+    .main-content { flex:1; margin-left:260px; padding:40px; }
+    .card { background:#fff; border-radius:12px; padding:25px; box-shadow:0 4px 12px rgba(0,0,0,0.05); margin-bottom:25px; }
+    .qr-box { background: white; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0; color: #333; }
+    .display-id { font-size: 22px; font-weight: bold; color: #0078d7; display: block; margin-top: 5px; }
+    .record-table { width:100%; border-collapse:collapse; }
+    .record-table th, .record-table td { border-bottom:1px solid #eee; padding:12px; text-align:left; }
+    .slot-tag { display:inline-block; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:bold; margin-right:5px; background:#eee; }
+    .evidence-img { width:70px; height:50px; object-fit:cover; border-radius:4px; cursor:pointer; border:1px solid #ddd; }
+    .btn-send { background:#28a745; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer; font-weight:bold; }
+    .back-btn { display: inline-block; color: white; text-decoration: none; margin-bottom: 20px; font-size: 14px; }
+    
+    .ai-badge {
+        display: inline-block;
+        background: #e3f2fd;
+        color: #0d47a1;
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 11px;
+        border: 1px solid #bbdefb;
+        font-weight: bold;
+    }
 </style>
 </head>
-
 <body>
 
 <div class="sidebar">
+    <a href="index.php" class="back-btn">← 介入リストに戻る</a>
     <h2>中村病院</h2>
-    <p>患者ID: <?= htmlspecialchars($p['user_id']) ?></p>
-    <hr>
-    <strong>病歴</strong><br>
-    <?= nl2br(htmlspecialchars($p['history'] ?? 'なし')) ?>
+    <p style="background:rgba(255,255,255,0.2); padding:10px; border-radius:5px; font-size:14px;">
+        🏥 担当ログイン:<br>
+        <strong><?= htmlspecialchars($_SESSION['yakuzaishi_login']) ?></strong>
+    </p>
+
+    <div class="qr-box">
+        <small style="font-weight:bold;">家族アプリ用QR</small><br>
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=<?= urlencode($display_id) ?>" alt="QR" style="margin-top:10px;">
+        <span class="display-id"><?= htmlspecialchars($display_id) ?></span>
+    </div>
+    
+    <div style="font-size:13px; opacity:0.8; line-height: 1.6;">
+        <strong>患者属性・病歴:</strong><br>
+        <?= nl2br(htmlspecialchars(($p['tags'] ?? '') . "\n" . ($p['history'] ?? ''))) ?>
+    </div>
 </div>
 
 <div class="main-content">
-
     <?php if($success_msg): ?>
-        <div class="success-banner"><?= $success_msg ?></div>
+        <div style="background:#d4edda; color:#155724; padding:15px; border-radius:8px; margin-bottom:20px;"><?= $success_msg ?></div>
     <?php endif; ?>
 
     <div class="card">
-        <h1><?= htmlspecialchars($p['user_id']) ?> 様</h1>
-        <p>生年月日: <?= htmlspecialchars($p['dob']) ?>（<?= (int)$p['age'] ?>歳）</p>
-    </div>
-
-    <div class="card" style="border-left: 5px solid #28a745;">
-        <h3 style="color: #28a745; margin-top: 0;">👨‍👩‍👧 家族用アプリへの連絡</h3>
-        <form action="" method="POST">
-            <textarea name="report_content" placeholder="家族へ伝えるメッセージを入力してください..." 
-                      style="width: 100%; height: 80px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box;"></textarea>
-            <div style="text-align: right; margin-top: 10px;">
-                <button type="submit" name="send_family_app" class="btn-send">家族アプリへ送信</button>
-            </div>
-        </form>
-
-        <div style="margin-top: 20px; background: #fdfdfd; padding: 15px; border-radius: 8px;">
-            <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #666;">最近の送信履歴</h4>
-            <?php if ($send_logs): foreach($send_logs as $log): ?>
-                <div class="history-item">
-                    <small style="color:#999;"><?= date('m/d H:i', strtotime($log['created_at'])) ?></small><br>
-                    <?= nl2br(htmlspecialchars($log['message'])) ?>
-                </div>
-            <?php endforeach; else: ?>
-                <p style="font-size: 12px; color: #ccc;">履歴はありません</p>
-            <?php endif; ?>
-        </div>
+        <h1 style="margin:0;"><?= htmlspecialchars($p['name'] ?? $p['user_id']) ?> 様</h1>
+        <p style="color:#666; margin-top:5px;">
+            <?= htmlspecialchars($p['dob'] ?? '-----') ?>生 （
+            <?php 
+                if (!empty($p['dob']) && $p['dob'] !== '0000-00-00') {
+                    $birthday = new DateTime($p['dob']);
+                    $today = new DateTime('now');
+                    echo $birthday->diff($today)->y; 
+                } else {
+                    echo "年齢不明";
+                }
+            ?>歳）
+        </p>
     </div>
 
     <div class="card">
-        <h3>💊 服薬状況（証拠写真）</h3>
+        <h3>💊 直近7日間の服薬記録</h3>
         <table class="record-table">
             <thead>
                 <tr>
                     <th>日付</th>
                     <th>区分</th>
                     <th>証拠写真</th>
+                    <th>AI解析</th>
                 </tr>
             </thead>
             <tbody>
@@ -231,33 +213,30 @@ body {
                 <tr>
                     <td><?= $d ?></td>
                     <td>
-                        <?php if (!empty($formatted_records[$d])): ?>
-                            <?php foreach ($formatted_records[$d] as $rec):
-                                $slot_class = '';
-                                if (str_contains($rec['slot'], '朝')) $slot_class = 'slot-morning';
-                                elseif (str_contains($rec['slot'], '昼')) $slot_class = 'slot-noon';
-                                elseif (str_contains($rec['slot'], '夜')) $slot_class = 'slot-evening';
-                            ?>
-                            <div style="margin-bottom: 5px;">
-                                <span class="slot-tag <?= $slot_class ?>"><?= htmlspecialchars($rec['slot']) ?></span>
+                        <?php if (!empty($formatted_records[$d])): foreach ($formatted_records[$d] as $rec): ?>
+                            <div style="margin-bottom:8px;">
+                                <span class="slot-tag"><?= htmlspecialchars($rec['slot']) ?></span>
                                 <small><?= $rec['time'] ?></small>
                             </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <span style="color:#ccc;">記録なし</span>
-                        <?php endif; ?>
+                        <?php endforeach; else: ?><span style="color:#ccc;">なし</span><?php endif; ?>
                     </td>
                     <td>
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <?php if (!empty($formatted_records[$d])): ?>
-                            <?php foreach ($formatted_records[$d] as $rec): ?>
-                                <?php if (!empty($rec['photo'])): ?>
-                                <img src="<?= UPLOAD_URL . rawurlencode($rec['photo']) ?>?v=<?= time() ?>"
-                                     class="evidence-img" onclick="window.open(this.src)" onerror="this.style.display='none';">
+                        <?php if (!empty($formatted_records[$d])): foreach ($formatted_records[$d] as $rec): if($rec['photo']): ?>
+                            <img src="<?= UPLOAD_URL . htmlspecialchars($rec['photo']) ?>" class="evidence-img" onclick="window.open(this.src)">
+                        <?php endif; endforeach; endif; ?>
+                    </td>
+                    <td>
+                        <?php if (!empty($formatted_records[$d])): foreach ($formatted_records[$d] as $rec): ?>
+                            <div style="margin-bottom:8px;">
+                                <?php if ($rec['photo']): ?>
+                                    <span class="ai-badge">
+                                        <?= htmlspecialchars($rec['ai_result'] ?? '解析中...') ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span style="color:#ccc; font-size:11px;">---</span>
                                 <?php endif; ?>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                        </div>
+                            </div>
+                        <?php endforeach; endif; ?>
                     </td>
                 </tr>
                 <?php endfor; ?>
@@ -265,6 +244,25 @@ body {
         </table>
     </div>
 
+    <div class="card">
+        <h3>家族への連絡</h3>
+        <form method="POST">
+            <textarea name="report_content" placeholder="診察結果やアドバイスを入力してください" style="width:100%;height:80px;border-radius:8px;border:1px solid #ddd;padding:10px;box-sizing:border-box;"></textarea>
+            <div style="text-align:right;margin-top:10px;">
+                <button type="submit" name="send_family_app" class="btn-send">内容を確認して送信</button>
+            </div>
+        </form>
+        <div style="margin-top:20px;">
+            <small style="color:#666;">最近の連絡履歴:</small>
+            <?php foreach ($chat_logs as $log): ?>
+                <div style="border-bottom:1px solid #eee; padding:8px 0; font-size:13px;">
+                    <strong><?= htmlspecialchars($log['sender_name']) ?></strong>: <?= nl2br(htmlspecialchars($log['message'])) ?>
+                    <div style="font-size:11px; color:#999;"><?= $log['created_at'] ?></div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
 </div>
+
 </body>
 </html>
