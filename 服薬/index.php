@@ -1,167 +1,196 @@
 <?php
-// ★【修正】タイムゾーンを日本時間(JST)に設定
 date_default_timezone_set('Asia/Tokyo');
-
-// PHPセッションを開始
 session_start();
 
-// 1. ログインチェックを省略し、初期設定を強制的に行う
-if (!isset($_SESSION['logged_in'])) {
-    $_SESSION['logged_in'] = true;
-    // 内部処理に必要なデータは維持
-    $_SESSION['daily_dose_target'] = 3; 
-    $_SESSION['streak_goal_days'] = 7;
-    $_SESSION['streak_days'] = 0;
-    $_SESSION['recorded_slots_today'] = [];
-    $_SESSION['last_record_time'] = 0;
-    $_SESSION['last_completion_date'] = date('Y-m-d', strtotime('-10 days')); 
+// 1. ログインチェック
+if (!isset($_SESSION['patient_user_id'])) {
+    header("Location: login_qr.php");
+    exit;
 }
-$_SESSION['user_id'] = '山田きよえ';
+$current_user_id = $_SESSION['patient_user_id'];
 
-$current_user_id = htmlspecialchars($_SESSION['user_id']);
-$daily_dose_target = $_SESSION['daily_dose_target'];
+// 2. DB接続
+$dsn = 'mysql:host=localhost;dbname=medicare_db;charset=utf8mb4';
+$user = 'root';
+$password = '';
+try {
+    $pdo = new PDO($dsn, $user, $password, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+} catch (PDOException $e) {
+    die("接続エラー: " . $e->getMessage());
+}
 
-// 2. 服薬区分の判定ロジック
-$all_slots = [];
-if ($daily_dose_target >= 1) $all_slots[] = '朝';
-if ($daily_dose_target >= 2) $all_slots[] = '昼';
-if ($daily_dose_target >= 3) $all_slots[] = '夜';
+/* ===================================================
+   患者ごとの目標回数（daily_target）を取得
+   =================================================== */
+$stmt_target = $pdo->prepare("SELECT daily_target FROM patients WHERE user_id = ?");
+$stmt_target->execute([$current_user_id]);
+$patient_info = $stmt_target->fetch(PDO::FETCH_ASSOC);
 
-$slots_recorded = $_SESSION['recorded_slots_today'];
-$is_goal_achieved = (count($slots_recorded) >= $daily_dose_target);
+// 佐藤はなさんは1日1回なので、設定がない場合も「1」にする
+$daily_dose_target = ($patient_info && (int)$patient_info['daily_target'] > 0) ? (int)$patient_info['daily_target'] : 1; 
+
+// --- はなまる判定用のデータ取得（今月分） ---
+$current_month = date('Y-m');
+$stmt_cal = $pdo->prepare("
+    SELECT DATE_FORMAT(record_timestamp, '%e') as day_num, COUNT(*) as cnt 
+    FROM medication_records 
+    WHERE user_id = ? AND DATE_FORMAT(record_timestamp, '%Y-%m') = ? 
+    GROUP BY DATE(record_timestamp)
+");
+$stmt_cal->execute([$current_user_id, $current_month]);
+$cal_records = $stmt_cal->fetchAll(PDO::FETCH_ASSOC);
+
+$recorded_days = [];
+foreach ($cal_records as $row) {
+    // 目標回数（1回）以上なら数値としてリストに追加
+    if ((int)$row['cnt'] >= $daily_dose_target) {
+        $recorded_days[] = (int)$row['day_num'];
+    }
+}
+
+// --- 本日の記録数と完了判定 ---
+$stmt_today_count = $pdo->prepare("SELECT COUNT(*) FROM medication_records WHERE user_id = ? AND DATE(record_timestamp) = CURDATE()");
+$stmt_today_count->execute([$current_user_id]);
+$today_count = (int)$stmt_today_count->fetchColumn();
+
+// 1回以上飲んでいれば達成！
+$is_goal_achieved = ($today_count >= $daily_dose_target);
+
+// 未服薬スロットの取得
+$stmt_slots = $pdo->prepare("SELECT time_slot FROM medication_records WHERE user_id = ? AND DATE(record_timestamp) = CURDATE()");
+$stmt_slots->execute([$current_user_id]);
+$slots_recorded = $stmt_slots->fetchAll(PDO::FETCH_COLUMN);
+
+$all_slots = ['朝', '昼', '夜'];
 $remaining_slots = array_diff($all_slots, $slots_recorded); 
 
-// メッセージ処理
 $message = isset($_GET['msg']) ? htmlspecialchars($_GET['msg']) : '';
-$is_error = strpos($message, '失敗') !== false || strpos($message, '過ぎ') !== false || strpos($message, '既に') !== false;
 ?>
 <!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>メディケア・リワード</title>
     <style>
-        /* CSSは高齢者向けの視認性と操作性を最優先 */
-        body { font-family: "Segoe UI", "Hiragino Sans", sans-serif; background: #f9fafb; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: white; border-radius: 20px; padding: 40px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15); text-align: center; width: 400px; }
+        body { font-family: "Hiragino Sans", sans-serif; background: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 400px; margin: 0 auto; }
+        .card { background: white; border-radius: 25px; padding: 30px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); text-align: center; margin-bottom: 20px; }
+        .user-info { font-size: 18px; color: #0078d7; font-weight: bold; margin-bottom: 20px; }
+        h1 { font-size: 22px; margin-bottom: 10px; color: #333; }
+        select { padding: 15px; border-radius: 12px; border: 2px solid #0078d7; font-size: 20px; width: 100%; margin-bottom: 20px; background: white; }
+        #camera-area { width: 100%; margin-bottom: 20px; display: none; }
+        video { width: 100%; border-radius: 15px; border: 3px solid #0078d7; background: #000; }
+        .btn-main { display: block; width: 100%; padding: 20px; font-size: 24px; font-weight: bold; border-radius: 15px; border: none; cursor: pointer; transition: 0.2s; }
+        .btn-orange { background: #ff9800; color: white; box-shadow: 0 5px 0 #e68a00; }
+        .btn-green { background: #4CAF50; color: white; box-shadow: 0 5px 0 #2e7d32; }
+        .btn-main:active { transform: translateY(3px); box-shadow: none; }
+        .goal-msg { background: #e8f5e9; color: #2e7d32; padding: 25px; border-radius: 15px; font-size: 20px; font-weight: bold; border: 2px solid #2e7d32; }
         
-        h1 { font-size: 28px; color: #333; margin-bottom: 10px; }
-        .user-info { font-size: 20px; color: #0078d7; font-weight: 700; margin-bottom: 25px; }
-        
-        /* 服薬区分選択（未記録分のみ） */
-        label { display: block; margin-bottom: 10px; color: #555; font-weight: 600; font-size: 20px; }
-        select { padding: 12px 18px; border-radius: 10px; border: 2px solid #ccc; font-size: 22px; width: 80%; margin-bottom: 30px;}
-        
-        /* 4. カメラ起動ボタン（<label>と<input>の組み合わせ） */
-        .camera-label {
-            /* ラベルをボタンとして装飾 */
-            display: inline-block;
-            background: #e6a500; 
-            color: white; 
-            cursor: pointer; 
-            transition: 0.3s; 
-            width: 95%; 
-            padding: 30px 20px; 
-            font-size: 30px; 
-            border-radius: 15px;
-            font-weight: 800;
-        }
-        .camera-label:hover { background: #cc9400; transform: scale(1.02); }
-        
-        /* 隠しインプットフィールド */
-        #camera-input {
-            display: none; /* 画面に表示しない */
-        }
-
-        /* 記録完了時 */
-        .goal-achieved { background: #d4edda; color: #155724; padding: 20px; border-radius: 10px; font-size: 20px; font-weight: 700; margin-top: 30px; }
-        .disabled-button { background: #ccc !important; cursor: not-allowed !important; color: #666 !important; font-size: 24px; padding: 25px 20px;}
-        
-        /* メッセージ表示 */
-        .msg-box { padding: 15px; border-radius: 8px; font-size: 16px; font-weight: 600; margin-top: 20px; }
-        .msg-success { background: #e6f4ea; color: #006644; }
-        .msg-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .cal-header { font-size: 18px; font-weight: bold; color: #444; margin-bottom: 15px; text-align: center; }
+        .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+        .cal-day { aspect-ratio: 1/1; border: 1px solid #eee; display: flex; align-items: center; justify-content: center; position: relative; border-radius: 8px; font-size: 14px; background: #fafafa; color: #bbb; }
+        .has-record { background: #fff; border-color: #ffd180; color: #333; }
+        .hanamaru { position: absolute; font-size: 28px; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #ff5252; opacity: 0.9; pointer-events: none; }
+        .today-circle { border: 2px solid #0078d7 !important; color: #0078d7 !important; font-weight: bold; background: #eef7ff; }
+        .reset-btn { display: inline-block; margin-top: 20px; color: #d9534f; text-decoration: none; font-size: 13px; border-bottom: 1px solid #d9534f; padding-bottom: 2px; }
     </style>
 </head>
 <body>
-<div class="card">
-    <h1>メディケア・リワード</h1>
+<div class="container">
+    <div class="card">
+        <h1>メディケア・リワード</h1>
+        <div class="user-info"><?= htmlspecialchars($current_user_id) ?> さんの記録</div>
 
-    <div class="user-info"><?= $current_user_id ?>さんの記録</div>
-    
-    <?php if ($message): ?>
-        <div class="msg-box <?= $is_error ? 'msg-error' : 'msg-success' ?>">
-            <?= $message ?>
-        </div>
-    <?php endif; ?>
-    
-    <?php if ($is_goal_achieved): ?>
+        <?php if ($message): ?>
+            <div style="background:#fff3cd; padding:10px; border-radius:10px; margin-bottom:15px; font-size:14px; border: 1px solid #ffeeba;"><?= $message ?></div>
+        <?php endif; ?>
 
-        <p class="goal-achieved">✅ 本日の服薬記録はすべて完了しました！</p>
-        <button type="button" disabled class="disabled-button">本日の記録は完了</button>
+        <?php if ($is_goal_achieved): ?>
+            <div class="goal-msg">💮 本日の服薬は<br>すべて完了しました！</div>
+        <?php else: ?>
+            <form id="recordForm" action="record_process.php" method="post">
+                <label style="display:block; margin-bottom:10px; font-weight:bold;">次に飲むお薬を選択：</label>
+                <select name="time" id="timeSelect" required>
+                    <?php foreach ($remaining_slots as $slot): ?>
+                        <option value="<?= htmlspecialchars($slot) ?>"><?= htmlspecialchars($slot) ?></option>
+                    <?php endforeach; ?>
+                </select>
 
-    <?php else: ?>
+                <div id="camera-area">
+                    <video id="video" autoplay playsinline></video>
+                    <input type="hidden" name="image_data" id="image_data">
+                </div>
 
-      <form id="recordForm" action="record_process.php" method="post" enctype="multipart/form-data">
-        
-        <label for="time_slot_select">次に記録する区分：</label>
-        
-        <select name="time" id="time_slot_select" required>
-          <?php foreach ($remaining_slots as $slot): ?>
-            <option value="<?= htmlspecialchars($slot) ?>"><?= htmlspecialchars($slot) ?></option>
-          <?php endforeach; ?>
-        </select>
-
-        <input 
-            type="file" 
-            accept="image/*" 
-            capture="camera" 
-            name="med_photo" 
-            id="camera-input" 
-            onchange="document.getElementById('recordForm').submit()"
-        >
-        
-        <label for="camera-input" class="camera-label">📸 写真を撮る</label>
-
-        </form>
-
-    <?php endif; ?>
-    
-</div>
-</body>
-<div class="card"> /*本番では消す*/
-    <h1>メディケア・リワード</h1>
-
-    <?php if ($is_goal_achieved): ?>
-
-        <p class="goal-achieved">✅ 本日の服薬記録はすべて完了しました！</p>
-        <button type="button" disabled class="disabled-button">本日の記録は完了</button>
-
-    <?php else: ?>
-
-      <form id="recordForm" action="record_process.php" method="post" enctype="multipart/form-data">
-        
-        <label for="time_slot_select">次に記録する区分：</label>
-        
-        <select name="time" id="time_slot_select" required>
-          <?php foreach ($remaining_slots as $slot): ?>
-            <option value="<?= htmlspecialchars($slot) ?>"><?= htmlspecialchars($slot) ?></option>
-          <?php endforeach; ?>
-        </select>
-
-        <input type="file" accept="image/*" capture="camera" name="med_photo" id="camera-input" onchange="document.getElementById('recordForm').submit()">
-        <label for="camera-input" class="camera-label">📸 写真を撮る</label>
-
-      </form>
-
-    <?php endif; ?>
-
-    <div style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px;">
-        <p style="font-size: 14px; color: #888;">【開発・テスト用】</p>
-        <a href="reset_day.php" style="color: #d9534f; text-decoration: none; font-weight: 600; display: inline-block; padding: 10px 15px; border: 1px solid #d9534f; border-radius: 5px;">
-            本日分の記録をリセット
-        </a>
+                <button type="button" id="start-btn" class="btn-main btn-orange">📸 写真を撮る</button>
+                <button type="button" id="capture-btn" class="btn-main btn-green" style="display:none;">🤳 服薬を報告する</button>
+            </form>
+        <?php endif; ?>
     </div>
-    
+
+    <div class="card">
+        <div class="cal-header">📅 <?= date('n') ?>月の「はなまる」表</div>
+        <div class="cal-grid">
+            <?php
+            $days_in_month = (int)date('t');
+            $today_d = (int)date('j');
+            for ($d = 1; $d <= $days_in_month; $d++):
+                // 数値として比較することで判定ミスを防ぐ
+                $is_recorded = in_array($d, $recorded_days, true);
+                $is_today = ($d === $today_d);
+            ?>
+                <div class="cal-day <?= $is_recorded ? 'has-record' : '' ?> <?= $is_today ? 'today-circle' : '' ?>">
+                    <?= $d ?>
+                    <?php if ($is_recorded): ?>
+                        <span class="hanamaru">💮</span>
+                    <?php endif; ?>
+                </div>
+            <?php endfor; ?>
+        </div>
+        <div style="text-align: center; font-size: 12px; color: #666; margin-top: 10px;">
+            ※1日<?= $daily_dose_target ?>回の服用で💮がつきます
+        </div>
+    </div>
+
+    <div style="text-align:center; margin-bottom: 40px;">
+        <a href="reset_day.php" class="reset-btn">データをリセットしてやり直す</a>
+    </div>
 </div>
+
+<script>
+    const startBtn = document.getElementById('start-btn');
+    const captureBtn = document.getElementById('capture-btn');
+    const cameraArea = document.getElementById('camera-area');
+    const video = document.getElementById('video');
+    const imageDataInput = document.getElementById('image_data');
+    const form = document.getElementById('recordForm');
+
+    startBtn.addEventListener('click', async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment" }, 
+                audio: false 
+            });
+            video.srcObject = stream;
+            cameraArea.style.display = 'block';
+            captureBtn.style.display = 'block';
+            startBtn.style.display = 'none';
+        } catch (err) {
+            alert("カメラを起動できませんでした。");
+        }
+    });
+
+    captureBtn.addEventListener('click', () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        
+        imageDataInput.value = canvas.toDataURL('image/jpeg');
+        captureBtn.innerHTML = "送信中...";
+        captureBtn.disabled = true;
+        form.submit();
+    });
+</script>
+</body>
 </html>
