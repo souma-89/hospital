@@ -1,20 +1,28 @@
 <?php
-// PHPセッションを開始
 session_start();
 date_default_timezone_set('Asia/Tokyo');
 
-// ========== データベース接続設定 ==========
+// ==========================================
+// 1. ログインチェック（未ログインならlogin.phpへ）
+// ==========================================
+if (!isset($_SESSION['yakuzaishi_login'])) {
+    header('Location: login.php');
+    exit;
+}
+
+/* =====================
+   DB設定
+===================== */
 $host = 'localhost';
 $db_name = 'medicare_db'; 
 $user = 'root'; 
 $password = ''; 
-// ===============================================
 
 try {
-    $pdo = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8", $user, $password);
+    $pdo = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8mb4", $user, $password);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
-    // ★★★ 自動デモデータ調整ロジック ★★★
+    // デモデータの自動挿入処理（既存のまま）
     $today_date = date('Y-m-d');
     if (!isset($_SESSION['last_demo_date']) || $_SESSION['last_demo_date'] !== $today_date) {
         $auto_insert_sql = "
@@ -34,9 +42,7 @@ try {
     die("データベース接続エラー: " . $e->getMessage()); 
 }
 
-// ----------------------------------------------------
-// 1. 患者の情報をDBから取得 (tagsを追加)
-// ----------------------------------------------------
+// 患者データと記録の取得ロジック（既存のまま）
 $stmt = $pdo->query("SELECT user_id, daily_target, tags FROM patients");
 $patient_raw_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -47,9 +53,6 @@ foreach ($patient_raw_data as $p) {
     $patient_tags[$p['user_id']] = $p['tags'] ?? '';
 }
 
-// ----------------------------------------------------
-// 2. 服薬データの取得とフィルタ
-// ----------------------------------------------------
 $daily_target = isset($_GET['target']) ? (int)$_GET['target'] : 3; 
 if ($daily_target < 1 || $daily_target > 3) $daily_target = 3;
 
@@ -64,9 +67,8 @@ foreach ($patient_targets as $user_id => $target) {
     }
 }
 
-if (empty($filtered_user_ids)) {
-    $priority_list = [];
-} else {
+$priority_list = [];
+if (!empty($filtered_user_ids)) {
     $user_id_list = "'" . implode("','", $filtered_user_ids) . "'";
     $stmt = $pdo->prepare("SELECT user_id, time_slot, record_timestamp FROM medication_records WHERE user_id IN ({$user_id_list}) AND record_timestamp BETWEEN :start_date AND :end_date ORDER BY record_timestamp DESC");
     $stmt->execute([':start_date' => $start_date, ':end_date' => $end_date]);
@@ -83,29 +85,26 @@ if (empty($filtered_user_ids)) {
         }
     }
 
-    // --- 【強化版】AI推奨アクション生成 ---
-    function generate_ai_action($data, $tags) {
+    function generate_status_report($data, $tags) {
         $is_single = strpos($tags, '独居') !== false;
         $is_dementia = strpos($tags, '認知症') !== false;
-
         if ($data['today_count'] === 0) {
-            $msg = "至急、電話にて服薬状況を確認。";
-            if ($is_single) $msg .= "（独居のため安否確認も兼ねる）";
+            $msg = "本日の記録なし。至急状況の確認が必要。";
+            if ($is_single) $msg .= "（独居のため安否確認を推奨）";
             return $msg;
         }
         if ($is_dementia && $data['missed_today']) {
-            return "認知機能による忘れの可能性。キーマン（家族等）へ連絡しサポートを依頼。";
+            return "飲み忘れが発生中。認知機能の影響が疑われるため家族連携を検討。";
         }
         if ($data['total_missed'] >= 3) {
-            return "記録の欠落が目立つ。次回来局時に一包化や服薬カレンダーの導入を提案。";
+            return "記録の欠落が目立つ状態。次回来局時に一包化の意向を確認。";
         }
         if ($data['consecutive_miss'] >= 2) {
-            return "連続未達。生活リズムの変化がないか、メッセージ等で状況をヒアリング。";
+            return "連続未達あり。生活リズムの変化がないか聞き取りが必要。";
         }
-        return "良好。通常通りモニタリングを継続。";
+        return "良好。通常通りのモニタリングを継続。";
     }
 
-    $priority_list = [];
     foreach ($filtered_user_ids as $user) {
         $target = $patient_targets[$user];
         $total_missed = 0;
@@ -130,7 +129,7 @@ if (empty($filtered_user_ids)) {
             'consecutive_miss' => $consecutive_miss, 
             'last_record' => $latest_record_map[$user] ?? null,
             'tags' => $patient_tags[$user],
-            'ai_action' => generate_ai_action($temp_data, $patient_tags[$user])
+            'status_report' => generate_status_report($temp_data, $patient_tags[$user])
         ];
     }
 
@@ -144,9 +143,9 @@ if (empty($filtered_user_ids)) {
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>【薬局】介入優先リスト | メディケア・リワード</title>
+    <title>【薬局】介入優先リスト | 中村病院</title>
     <style>
-        body { font-family: "Segoe UI", "Hiragino Sans", sans-serif; background: #eef2f5; color: #333; margin: 0; padding: 20px; }
+        body { font-family: "Segoe UI", "Hiragino Sans", sans-serif; background: #eef2f5; color: #333; margin: 0; padding: 0 20px 20px 20px; }
         .container { max-width: 1300px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); } 
         h1 { color: #0078d7; border-bottom: 3px solid #0078d7; padding-bottom: 10px; margin-top: 0; }
         .priority-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
@@ -160,10 +159,27 @@ if (empty($filtered_user_ids)) {
         .badge-ok { background: #388e3c; color: white; }
         .tag-badge { background: #e0e0e0; color: #555; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin-right: 4px; display: inline-block; }
         .patient-link { color: #0078d7; text-decoration: none; font-weight: 600; font-size: 1.1em; }
-        .ai-text { font-size: 0.9em; line-height: 1.4; color: #444; }
+        .report-text { font-size: 0.9em; line-height: 1.4; color: #444; }
+        
+        /* ログアウトボタン用 */
+        .logout-btn { background: #f44336; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 14px; }
+        .logout-btn:hover { background: #d32f2f; }
     </style>
 </head>
 <body>
+
+<nav style="background: white; padding: 25px 0; border-bottom: 4px solid #0078d7; margin-bottom: 25px;">
+    <div style="max-width: 1300px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 0 30px;">
+        <a href="index.php" style="text-decoration: none; display: flex; align-items: center; gap: 30px;">
+            <img src="logo.png" alt="Logo" style="height: 100px; width: auto;">
+            <div style="display: flex; flex-direction: column; justify-content: center;">
+                <div style="font-size: 48px; color: #0078d7; font-weight: bold; line-height: 1.1; letter-spacing: 3px;">中村病院</div>
+                <div style="font-size: 18px; color: #666; font-weight: bold; letter-spacing: 1.5px; margin-top: 2px;">NAKAMURA MEDICAL CENTER</div>
+            </div>
+        </a>
+        <a href="logout.php" class="logout-btn">ログアウト</a>
+    </div>
+</nav>
 
 <div class="container">
     <h1>🏥 薬局管理画面 - 介入優先リスト</h1>
@@ -189,7 +205,7 @@ if (empty($filtered_user_ids)) {
                 <th>総未達(7日)</th>
                 <th>連続欠損</th>
                 <th>最終記録</th>
-                <th style="width: 350px;">現状とAI推奨アクション</th>
+                <th style="width: 350px;">現状</th>
             </tr>
         </thead>
         <tbody>
@@ -214,12 +230,11 @@ if (empty($filtered_user_ids)) {
                     <td><?= $data['total_missed'] ?>回</td>
                     <td><?= $data['consecutive_miss'] ?>日</td>
                     <td style="font-size: 0.85em;"><?= $data['last_record'] ? date('m/d H:i', strtotime($data['last_record'])) : 'なし' ?></td>
-                    <td class="ai-text"><?= htmlspecialchars($data['ai_action']) ?></td> 
+                    <td class="report-text"><?= htmlspecialchars($data['status_report']) ?></td> 
                 </tr>
             <?php endforeach; ?>
         </tbody>
     </table>
 </div>
-
 </body>
 </html>
