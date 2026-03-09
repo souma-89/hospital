@@ -2,16 +2,14 @@
 session_start();
 date_default_timezone_set('Asia/Tokyo');
 
-// ==========================================
-// 1. ログインチェック（未ログインならlogin.phpへ）
-// ==========================================
+// 1. ログインチェック
 if (!isset($_SESSION['yakuzaishi_login'])) {
     header('Location: login.php');
     exit;
 }
 
 /* =====================
-   DB設定
+    DB設定
 ===================== */
 $host = 'localhost';
 $db_name = 'medicare_db'; 
@@ -22,35 +20,26 @@ try {
     $pdo = new PDO("mysql:host=$host;dbname=$db_name;charset=utf8mb4", $user, $password);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     
-    // デモデータの自動挿入処理（既存のまま）
-    $today_date = date('Y-m-d');
-    if (!isset($_SESSION['last_demo_date']) || $_SESSION['last_demo_date'] !== $today_date) {
-        $auto_insert_sql = "
-            DELETE FROM medication_records WHERE record_timestamp >= '{$today_date} 00:00:00';
-            INSERT INTO medication_records (user_id, time_slot, record_timestamp) VALUES 
-            ('田中まさる', '朝', '{$today_date} 08:15:00'),
-            ('田中まさる', '昼', '{$today_date} 12:45:00'),
-            ('田中まさる', '夜', '{$today_date} 19:30:00'),
-            ('木村はるか', '朝', '{$today_date} 08:20:00'),
-            ('木村はるか', '昼', '{$today_date} 13:00:00'),
-            ('木村はるか', '夜', '{$today_date} 19:00:00');
-        ";
-        $pdo->exec($auto_insert_sql);
-        $_SESSION['last_demo_date'] = $today_date;
-    }
+    // ⚠️ デモデータの自動削除・挿入ロジックを完全に撤廃しました。
 } catch (PDOException $e) {
     die("データベース接続エラー: " . $e->getMessage()); 
 }
 
-// 患者データと記録の取得ロジック（既存のまま）
-$stmt = $pdo->query("SELECT user_id, daily_target, tags FROM patients");
+// 2. 未読メッセージ数をカウントして患者データを取得
+$stmt = $pdo->query("
+    SELECT p.*, 
+    (SELECT COUNT(*) FROM patient_replies r WHERE r.user_id = p.user_id AND r.is_read = 0) as unread_count
+    FROM patients p
+");
 $patient_raw_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $patient_targets = [];
 $patient_tags = [];
+$patient_unread = [];
 foreach ($patient_raw_data as $p) {
     $patient_targets[$p['user_id']] = (int)$p['daily_target'];
     $patient_tags[$p['user_id']] = $p['tags'] ?? '';
+    $patient_unread[$p['user_id']] = (int)$p['unread_count'];
 }
 
 $daily_target = isset($_GET['target']) ? (int)$_GET['target'] : 3; 
@@ -109,6 +98,7 @@ if (!empty($filtered_user_ids)) {
         $target = $patient_targets[$user];
         $total_missed = 0;
         $consecutive_miss = 0;
+        $today_date = date('Y-m-d');
         for ($i = 0; $i < $days_to_check; $i++) {
             $date_check = date('Y-m-d', strtotime("-$i day"));
             $recorded_count = isset($record_map[$user][$date_check]) ? count(array_unique($record_map[$user][$date_check])) : 0;
@@ -129,6 +119,7 @@ if (!empty($filtered_user_ids)) {
             'consecutive_miss' => $consecutive_miss, 
             'last_record' => $latest_record_map[$user] ?? null,
             'tags' => $patient_tags[$user],
+            'unread_count' => $patient_unread[$user],
             'status_report' => generate_status_report($temp_data, $patient_tags[$user])
         ];
     }
@@ -160,23 +151,21 @@ if (!empty($filtered_user_ids)) {
         .tag-badge { background: #e0e0e0; color: #555; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin-right: 4px; display: inline-block; }
         .patient-link { color: #0078d7; text-decoration: none; font-weight: 600; font-size: 1.1em; }
         .report-text { font-size: 0.9em; line-height: 1.4; color: #444; }
-        
-        /* ログアウトボタン用 */
         .logout-btn { background: #f44336; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 14px; }
-        .logout-btn:hover { background: #d32f2f; }
+        .unread-badge { background: #ff4d4f; color: white; font-size: 10px; font-weight: bold; padding: 2px 8px; border-radius: 10px; margin-left: 8px; vertical-align: middle; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.05); } 100% { opacity: 1; transform: scale(1); } }
     </style>
 </head>
 <body>
 
 <nav style="background: white; padding: 25px 0; border-bottom: 4px solid #0078d7; margin-bottom: 25px;">
     <div style="max-width: 1300px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 0 30px;">
-        <a href="index.php" style="text-decoration: none; display: flex; align-items: center; gap: 30px;">
-            <img src="logo.png" alt="Logo" style="height: 100px; width: auto;">
+        <div style="display: flex; align-items: center; gap: 30px;">
             <div style="display: flex; flex-direction: column; justify-content: center;">
                 <div style="font-size: 48px; color: #0078d7; font-weight: bold; line-height: 1.1; letter-spacing: 3px;">中村病院</div>
                 <div style="font-size: 18px; color: #666; font-weight: bold; letter-spacing: 1.5px; margin-top: 2px;">NAKAMURA MEDICAL CENTER</div>
             </div>
-        </a>
+        </div>
         <a href="logout.php" class="logout-btn">ログアウト</a>
     </div>
 </nav>
@@ -217,7 +206,11 @@ if (!empty($filtered_user_ids)) {
                 <tr class="<?= $row_class ?>">
                     <td style="font-weight: bold; text-align: center;"><?= $row_class === 'priority-high' ? '高' : ($row_class === 'priority-mid' ? '中' : '低') ?></td>
                     <td>
-                        <a href="detail.php?id=<?= urlencode($data['user_name']) ?>" class="patient-link"><?= htmlspecialchars($data['user_name']) ?></a><br>
+                        <a href="detail.php?id=<?= urlencode($data['user_name']) ?>" class="patient-link"><?= htmlspecialchars($data['user_name']) ?></a>
+                        <?php if ($data['unread_count'] > 0): ?>
+                            <span class="unread-badge">新着 (<?= $data['unread_count'] ?>)</span>
+                        <?php endif; ?>
+                        <br>
                         <?php foreach($tags_array as $t): ?>
                             <span class="tag-badge"><?= htmlspecialchars(trim($t)) ?></span>
                         <?php endforeach; ?>
